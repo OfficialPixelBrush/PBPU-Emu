@@ -1,0 +1,310 @@
+#include <ncurses.h>
+#include <stdint.h>
+#include <unistd.h>
+
+// Screen width and height
+int scrHeight, scrWidth;
+// Disassembly window width
+int disWidth = 15;
+
+// Program memory
+uint8_t rom[256];
+// Random access memory
+uint8_t ram[128];
+// Pointer to the current instruction
+uint8_t pcPtr;
+// Temporary PC Register
+uint8_t tmpPcPtr;
+// Location Register (used for RAM access)
+uint8_t locPtr;
+// ALU Registers
+uint8_t regX, regY, regZ;
+// If carry should be used for math
+bool useCarry = false;
+
+// Opcode enum
+enum Opcodes {
+    OP_NOP, // -
+    OP_ADD, // Z = X + Y
+    OP_SUB, // Z = X - Y
+    OP_WT1, // locPtr = (locPtr & 0x0F) | ((val & 0xF) << 4)
+    OP_WT2, // locPtr = (locPtr & 0xF0) | (val & 0xF)
+    OP_WTX, // X = val
+    OP_WTY, // Y = val
+    OP_WTZ, // Z = val
+    OP_ZTR, // ram[locPtr] = Z
+    OP_RTZ, // Z = ram[locPtr]
+    OP_PC1, // tmpPcPtr = (tmpPcPtr & 0x0F) | ((val & 0xF) << 4)
+    OP_PC2, // tmpPcPtr = (tmpPcPtr & 0xF0) | (val & 0xF)
+    OP_JMP, // pcPtr = tmpPcPtr
+    OP_RTX, // ram[locPtr] = X
+    OP_RTY, // ram[locPtr] = Y
+    OP_USC  // useCarry = !useCarry
+};
+
+char* DecodeOpCode(uint8_t* buff, int addr) {
+    uint8_t op = (buff[addr] & 0xF0) >> 4;
+    switch(op) {
+        case OP_NOP: return "NOP";
+        case OP_ADD: return "ADD";
+        case OP_SUB: return "SUB";
+        case OP_WT1: return "WT1";
+        case OP_WT2: return "WT2";
+        case OP_WTX: return "WTX";
+        case OP_WTY: return "WTY";
+        case OP_WTZ: return "WTZ";
+        case OP_ZTR: return "ZTR";
+        case OP_RTZ: return "RTZ";
+        case OP_PC1: return "PC1";
+        case OP_PC2: return "PC2";
+        case OP_JMP: return "JMP";
+        case OP_RTX: return "RTX";
+        case OP_RTY: return "RTY";
+        case OP_USC: return "USC";
+    }
+    return "ERR";
+}
+
+// Write a 4-Bit value to the buffer
+void WriteNibble(uint8_t* buff, uint8_t addr, uint8_t val) {
+    if (addr % 2 == 0)
+        buff[addr/2] = (buff[addr/2] & 0xF0) | (val & 0x0F);
+    else
+        buff[addr/2] = (buff[addr/2] & 0x0F) | ((val & 0x0F) << 4);
+}
+
+// Read a 4-Bit value from the buffer
+uint8_t ReadNibble(uint8_t* buff, uint8_t addr) {
+    if (addr % 2 == 0)
+        return buff[addr/2] & 0x0F;
+    else
+        return (buff[addr/2] >> 4) & 0x0F;
+}
+
+// Limit registers to 4-Bit range
+void LimitRegs() {
+    regX &= 0xF;
+    regY &= 0xF;
+    regZ &= 0xF;
+}
+
+// Perform a single simulation step
+void SimStep() {
+    uint8_t op = rom[pcPtr] >> 4;
+    uint8_t val = rom[pcPtr] & 0xF;
+    switch(op) {
+        case OP_NOP:
+            break;
+        case OP_ADD:
+            regZ = regX + regY;
+            break;
+        case OP_SUB:
+            regZ = regX - regY;
+            break;
+        case OP_WT1:
+            locPtr = (locPtr & 0x0F) | (val << 4);
+            break;
+        case OP_WT2:
+            locPtr = (locPtr & 0xF0) | (val);
+            break;
+        case OP_WTX:
+            regX = val;
+            break;
+        case OP_WTY:
+            regY = val;
+            break;
+        case OP_WTZ:
+            regZ = val;
+            break;
+        case OP_ZTR:
+            WriteNibble(ram, locPtr, regZ);
+            break;
+        case OP_RTZ:
+            regZ = ReadNibble(ram, locPtr);
+            break;
+        case OP_PC1:
+            tmpPcPtr = (tmpPcPtr & 0xF0) | (val);
+            break;
+        case OP_PC2:
+            tmpPcPtr = (tmpPcPtr & 0x0F) | (val << 4);
+            break;
+        case OP_JMP:
+            tmpPcPtr--; // Needs to be here due to a hardware quirk
+            pcPtr = tmpPcPtr;
+            break;
+        case OP_RTX:
+            regX = ReadNibble(ram, locPtr);
+            break;
+        case OP_RTY:
+            regY = ReadNibble(ram, locPtr);
+            break;
+        case OP_USC:
+            useCarry = !useCarry;
+            break;
+    }
+    LimitRegs();
+    pcPtr++;
+}
+
+// Update the 4x4 screen
+void UpdateScreen(WINDOW* win) {
+    for (uint8_t row = 0; row < 8; row++) {   
+        wmove(win, row+1, 1); 
+        uint8_t rowVal = ReadNibble(ram, row/2);
+        for (uint8_t col = 0; col < 4; col++) {
+            if ((rowVal >> (3 - col)) & 0x1) {
+                waddnstr(win, "###", 3);
+            } else {
+                waddnstr(win, "   ", 3);
+            }
+        }
+    }
+    box(win, 0, 0);
+    wnoutrefresh(win);
+}
+
+// Update the disassembly window
+void UpdateDisassembly(WINDOW* win) {
+    // Get window size
+    int y,x;
+    getmaxyx(win, y, x);
+    werase(win);
+    box(win, 0, 0);
+    mvwaddstr(win, 0, 1, "[Disassembly]");
+    int cursor_row = y / 2; // where the ">" is
+    mvwaddch(win, cursor_row, 1, '>');
+    int half_lines = (y - 2) / 2; // number of lines above/below cursor
+    for (int offset = -half_lines; offset <=half_lines; offset++) {
+        int line = cursor_row + offset;
+        if (line <= 0 || line >= y-1) continue;
+        int addr = pcPtr + offset;
+        if (addr < 0 || addr >= (int)sizeof(rom)) continue;
+
+        mvwprintw(
+            win,
+            line, pcPtr == addr ? 3 : 2,
+            "%02X:  %s %01X",
+            addr,
+            DecodeOpCode(rom, addr),
+            rom[addr] & 0xF
+        );
+    }
+    wnoutrefresh(win);
+}
+
+// Update Register Window
+void UpdateRegisters(WINDOW* win) {
+    int y,x;
+    getmaxyx(win, y, x);
+    box(win, 0, 0);
+    mvwaddstr(win, 0, 1, "[Registers]");
+    mvwprintw(win, 1, 1, "  X: %01X Y: %01X Z: %01X", regX, regY, regZ);
+    mvwprintw(win, 2, 2, "PC: %02X", pcPtr);
+    mvwprintw(win, 2, x-2-6, "LC: %02X", locPtr);
+    wnoutrefresh(win);
+}
+
+// Render memory contents
+void UpdateMemory(WINDOW* win) {
+    int h, w;
+    getmaxyx(win, h, w);
+    box(win, 0, 0);
+    mvwaddstr(win, 0, 2, "[Memory]");
+
+    const int bytes_per_row = 16;
+    const int max_bytes = 0x100;
+    for (int i = 0; i < bytes_per_row; ++i) {
+        mvwprintw(win, 1, 5+(i*2), "%01X ", i);
+    }
+
+    for (int row = 0; row < h - 2; ++row) {
+        int addr = row * bytes_per_row;
+        if (addr >= max_bytes) break;
+
+        mvwprintw(win, row + 2, 1, "%02X: ", addr);
+
+        for (int col = 0; col < bytes_per_row; ++col) {
+            int index = addr + col;
+            if (index >= max_bytes) break;
+
+            wprintw(win, "%01X ", ReadNibble(ram, index));
+        }
+    }
+
+    wnoutrefresh(win);
+}
+
+// Render info text
+void UpdateText(WINDOW* win) {
+    box(win,0,0);
+    mvwaddstr(win, 1, 3, "PBPU-Emu v1.0");
+    mvwaddstr(win, 2, 3, "by PixelBrush");
+    wnoutrefresh(win);
+}
+
+// Main function
+int main(int argc, char** argv) {
+    // Check if program filename has been passed in
+    if (argc < 2) {
+        printf("No program passed in!\n");
+        return 1;
+    }
+    // Scoping these so they don't stick
+    // around in memory while we don't need them
+    {
+        FILE* prgFile;
+
+        prgFile = fopen(argv[1], "rb");
+        if (prgFile == NULL) {
+            printf("Program not found!\n");
+            fclose(prgFile);
+            return 1;
+        }
+
+        {
+            size_t readBytes = fread(rom, sizeof(uint8_t), sizeof(rom) - 1, prgFile);
+            printf("Read %zu bytes.\n", readBytes);
+            if (readBytes <= 0) {
+                printf("Program is empty!\n");
+                fclose(prgFile);
+                return 1;
+            }
+        }
+        fclose(prgFile);
+    }
+
+    // Init ncurses window
+    initscr();
+    noecho();
+    cbreak();
+    nodelay(stdscr, TRUE);   // non-blocking input (avoids internal waits)
+    keypad(stdscr, TRUE);
+    idlok(stdscr, TRUE);    // enable insert/delete line optimization
+    idcok(stdscr, TRUE);    // enable insert/delete char optimization
+    curs_set(0);
+
+    getmaxyx(stdscr, scrHeight, scrWidth);
+
+    // Define sub-windows
+    WINDOW* regWin = newwin(4, 20, 0,0);
+    WINDOW* disWin = newwin(scrHeight,disWidth,0,scrWidth-disWidth);
+    WINDOW* scrWin = newwin(4*2+2,4*3+2,4,0);
+    WINDOW* memWin = newwin(scrHeight, 0xF*2 + 8, 0, 20);
+    WINDOW* texWin = newwin(4, 20, scrHeight-4, 0);
+    // Only needs to be rendered once
+    UpdateText(texWin);
+
+    // Main program look
+    while(true) {
+        UpdateMemory(memWin);
+        UpdateRegisters(regWin);
+        UpdateDisassembly(disWin);
+        UpdateScreen(scrWin);
+        SimStep();
+        doupdate();
+        usleep(1000000);
+    }
+    delwin(scrWin);
+    endwin();
+    return 0;
+}
