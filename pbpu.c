@@ -1,5 +1,6 @@
 #include <ncurses.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -15,6 +16,8 @@ bool regsDirty = true;
 bool screenDirty = true;
 // Step mode
 bool stepMode = false;
+// Delay
+int delayTime = 100000;
 
 // Program memory
 uint8_t rom[256];
@@ -284,44 +287,48 @@ int main(int argc, char** argv) {
     }
     // Read other params
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0) {
+            printf("pbpu <file> [options]\n");
+            printf("--step: Single step mode\n");
+            printf("--delay=<num>: Delay in microseconds\n");
+            return 0;
+        }
         if (strcmp(argv[i], "--step") == 0) {
             stepMode = true;
+        }
+        if (strncmp(argv[i], "--delay=", 8) == 0) {
+            if (sscanf(argv[i] + 8, "%d", &delayTime) != 1) {
+                printf("Invalid delay value!\n");
+                return 1;
+            }
+            if (delayTime < 0) {
+                printf("Delay can't be negative!\n");
+                return 1;
+            }
         }
     }
     // Scoping these so they don't stick
     // around in memory while we don't need them
     {
         FILE* prgFile;
-
         prgFile = fopen(argv[1], "rb");
         if (prgFile == NULL) {
             printf("Program not found!\n");
             fclose(prgFile);
             return 1;
         }
-
-        {
-            size_t readBytes = fread(rom, sizeof(uint8_t), sizeof(rom) - 1, prgFile);
-            printf("Read %zu bytes.\n", readBytes);
-            if (readBytes <= 0) {
-                printf("Program is empty!\n");
-                fclose(prgFile);
-                return 1;
-            }
+        size_t readBytes = fread(rom, sizeof(uint8_t), sizeof(rom) - 1, prgFile);
+        printf("Read %zu bytes.\n", readBytes);
+        if (readBytes <= 0) {
+            printf("Program is empty!\n");
+            fclose(prgFile);
+            return 1;
         }
         fclose(prgFile);
     }
 
     // Init ncurses window
     initscr();
-    noecho();
-    cbreak();
-    if (!stepMode)
-        nodelay(stdscr, TRUE);
-    keypad(stdscr, TRUE);
-    idlok(stdscr, TRUE);
-    idcok(stdscr, TRUE);
-    curs_set(0);
 
     getmaxyx(stdscr, scrHeight, scrWidth);
 
@@ -336,8 +343,25 @@ int main(int argc, char** argv) {
     box(disWin, 0, 0);
     mvwaddstr(disWin, 0, 1, "[Disassembly]");
 
+    noecho();
+    cbreak();
+    if (!stepMode)
+        nodelay(stdscr, TRUE);
+    keypad(stdscr, TRUE);
+    idlok(stdscr, TRUE);
+    idcok(stdscr, TRUE);
+    curs_set(0);
+
     // Main program look
     while(true) {
+        if (!stepMode) {
+            usleep(delayTime);
+        } else {
+            getch();
+        }
+
+        SimStep();
+
         UpdateDisassembly(disWin);
         if (regsDirty) {
             UpdateRegisters(regWin);
@@ -351,13 +375,7 @@ int main(int argc, char** argv) {
             UpdateMemory(memWin);
             ramDirty = false;
         }
-        SimStep();
         doupdate();
-        if (stepMode) {
-            getch();
-        } else {
-            usleep(100000);
-        }
     }
     delwin(scrWin);
     endwin();
