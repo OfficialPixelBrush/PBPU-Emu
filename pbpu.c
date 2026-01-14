@@ -1,6 +1,7 @@
 #include <ncurses.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <string.h>
 
 // Screen width and height
 int scrHeight, scrWidth;
@@ -12,6 +13,8 @@ bool ramDirty = true;
 bool regsDirty = true;
 // If screen needs to be updated
 bool screenDirty = true;
+// Step mode
+bool stepMode = false;
 
 // Program memory
 uint8_t rom[256];
@@ -258,7 +261,7 @@ void InitMemory(WINDOW* win) {
             int index = addr + col;
             if (index >= max_bytes) break;
 
-            wprintw(win, "%01X ", 0);
+            wprintw(win, "%01X ", ReadNibble(ram, addr));
         }
     }
     wnoutrefresh(win);
@@ -267,8 +270,8 @@ void InitMemory(WINDOW* win) {
 // Render info text
 void UpdateText(WINDOW* win) {
     box(win,0,0);
-    mvwaddstr(win, 1, 3, "PBPU-Emu v1.0");
-    mvwaddstr(win, 2, 3, "by PixelBrush");
+    mvwaddstr(win, 1, 3, "PBPU-Emu 1.0.0");
+    mvwaddstr(win, 2, 3, "by  PixelBrush");
     wnoutrefresh(win);
 }
 
@@ -278,6 +281,12 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         printf("No program passed in!\n");
         return 1;
+    }
+    // Read other params
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--step") == 0) {
+            stepMode = true;
+        }
     }
     // Scoping these so they don't stick
     // around in memory while we don't need them
@@ -307,10 +316,11 @@ int main(int argc, char** argv) {
     initscr();
     noecho();
     cbreak();
-    nodelay(stdscr, TRUE);   // non-blocking input (avoids internal waits)
+    if (!stepMode)
+        nodelay(stdscr, TRUE);
     keypad(stdscr, TRUE);
-    idlok(stdscr, TRUE);    // enable insert/delete line optimization
-    idcok(stdscr, TRUE);    // enable insert/delete char optimization
+    idlok(stdscr, TRUE);
+    idcok(stdscr, TRUE);
     curs_set(0);
 
     getmaxyx(stdscr, scrHeight, scrWidth);
@@ -322,10 +332,9 @@ int main(int argc, char** argv) {
     WINDOW* disWin = newwin(scrHeight,disWidth,0, 20 + 0xF*2 + 8);
     WINDOW* texWin = newwin(4, 20, scrHeight-4, 0);
     // Only needs to be rendered once
+    InitMemory(memWin);
     box(disWin, 0, 0);
     mvwaddstr(disWin, 0, 1, "[Disassembly]");
-    InitMemory(memWin);
-    UpdateText(texWin);
 
     // Main program look
     while(true) {
@@ -344,7 +353,11 @@ int main(int argc, char** argv) {
         }
         SimStep();
         doupdate();
-        usleep(100000);
+        if (stepMode) {
+            getch();
+        } else {
+            usleep(100000);
+        }
     }
     delwin(scrWin);
     endwin();
