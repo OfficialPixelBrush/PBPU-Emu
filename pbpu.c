@@ -6,6 +6,12 @@
 int scrHeight, scrWidth;
 // Disassembly window width
 int disWidth = 15;
+// If ram needs to be updated
+bool ramDirty = true;
+// If regs needs to be updated
+bool regsDirty = true;
+// If screen needs to be updated
+bool screenDirty = true;
 
 // Program memory
 uint8_t rom[256];
@@ -97,36 +103,48 @@ void SimStep() {
             break;
         case OP_ADD:
             regZ = regX + regY;
+            regsDirty = true;
             break;
         case OP_SUB:
             regZ = regX - regY;
+            regsDirty = true;
             break;
         case OP_WT1:
             locPtr = (locPtr & 0x0F) | (val << 4);
+            regsDirty = true;
             break;
         case OP_WT2:
             locPtr = (locPtr & 0xF0) | (val);
+            regsDirty = true;
             break;
         case OP_WTX:
             regX = val;
+            regsDirty = true;
             break;
         case OP_WTY:
             regY = val;
+            regsDirty = true;
             break;
         case OP_WTZ:
             regZ = val;
+            regsDirty = true;
             break;
         case OP_ZTR:
             WriteNibble(ram, locPtr, regZ);
+            screenDirty = (locPtr < 4);
+            ramDirty = true;
             break;
         case OP_RTZ:
             regZ = ReadNibble(ram, locPtr);
+            regsDirty = true;
             break;
         case OP_PC1:
             tmpPcPtr = (tmpPcPtr & 0xF0) | (val);
+            regsDirty = true;
             break;
         case OP_PC2:
             tmpPcPtr = (tmpPcPtr & 0x0F) | (val << 4);
+            regsDirty = true;
             break;
         case OP_JMP:
             tmpPcPtr--; // Needs to be here due to a hardware quirk
@@ -134,9 +152,11 @@ void SimStep() {
             break;
         case OP_RTX:
             regX = ReadNibble(ram, locPtr);
+            regsDirty = true;
             break;
         case OP_RTY:
             regY = ReadNibble(ram, locPtr);
+            regsDirty = true;
             break;
         case OP_USC:
             useCarry = !useCarry;
@@ -148,14 +168,15 @@ void SimStep() {
 
 // Update the 4x4 screen
 void UpdateScreen(WINDOW* win) {
-    for (uint8_t row = 0; row < 8; row++) {   
+    if (!ramDirty) return;
+    for (uint8_t row = 0; row < 4*2; row++) {   
         wmove(win, row+1, 1); 
         uint8_t rowVal = ReadNibble(ram, row/2);
         for (uint8_t col = 0; col < 4; col++) {
             if ((rowVal >> (3 - col)) & 0x1) {
-                waddnstr(win, "###", 3);
+                waddnstr(win, "####", 4);
             } else {
-                waddnstr(win, "   ", 3);
+                waddnstr(win, "    ", 4);
             }
         }
     }
@@ -168,9 +189,6 @@ void UpdateDisassembly(WINDOW* win) {
     // Get window size
     int y,x;
     getmaxyx(win, y, x);
-    werase(win);
-    box(win, 0, 0);
-    mvwaddstr(win, 0, 1, "[Disassembly]");
     int cursor_row = y / 2; // where the ">" is
     mvwaddch(win, cursor_row, 1, '>');
     int half_lines = (y - 2) / 2; // number of lines above/below cursor
@@ -205,7 +223,20 @@ void UpdateRegisters(WINDOW* win) {
 }
 
 // Render memory contents
+
 void UpdateMemory(WINDOW* win) {
+    int h, w;
+    getmaxyx(win, h, w);
+
+    const int bytes_per_row = 16;
+    const int max_bytes = 0x100;
+
+    mvwprintw(win, 2+locPtr/bytes_per_row, 5+((locPtr%bytes_per_row)*2), "%01X", ReadNibble(ram, locPtr));
+    wnoutrefresh(win);
+}
+
+// Init Memory
+void InitMemory(WINDOW* win) {
     int h, w;
     getmaxyx(win, h, w);
     box(win, 0, 0);
@@ -227,10 +258,9 @@ void UpdateMemory(WINDOW* win) {
             int index = addr + col;
             if (index >= max_bytes) break;
 
-            wprintw(win, "%01X ", ReadNibble(ram, index));
+            wprintw(win, "%01X ", 0);
         }
     }
-
     wnoutrefresh(win);
 }
 
@@ -286,23 +316,35 @@ int main(int argc, char** argv) {
     getmaxyx(stdscr, scrHeight, scrWidth);
 
     // Define sub-windows
-    WINDOW* regWin = newwin(4, 20, 0,0);
-    WINDOW* disWin = newwin(scrHeight,disWidth,0,scrWidth-disWidth);
-    WINDOW* scrWin = newwin(4*2+2,4*3+2,4,0);
+    WINDOW* regWin = newwin(4, 20, 0, 0);
+    WINDOW* scrWin = newwin(4*2+2,4*4+2,4,1);
     WINDOW* memWin = newwin(scrHeight, 0xF*2 + 8, 0, 20);
+    WINDOW* disWin = newwin(scrHeight,disWidth,0, 20 + 0xF*2 + 8);
     WINDOW* texWin = newwin(4, 20, scrHeight-4, 0);
     // Only needs to be rendered once
+    box(disWin, 0, 0);
+    mvwaddstr(disWin, 0, 1, "[Disassembly]");
+    InitMemory(memWin);
     UpdateText(texWin);
 
     // Main program look
     while(true) {
-        UpdateMemory(memWin);
-        UpdateRegisters(regWin);
         UpdateDisassembly(disWin);
-        UpdateScreen(scrWin);
+        if (regsDirty) {
+            UpdateRegisters(regWin);
+            regsDirty = false;
+        }
+        if (screenDirty) {
+            UpdateScreen(scrWin);
+            screenDirty = false;
+        }
+        if (ramDirty) {
+            UpdateMemory(memWin);
+            ramDirty = false;
+        }
         SimStep();
         doupdate();
-        usleep(1000000);
+        usleep(100000);
     }
     delwin(scrWin);
     endwin();
