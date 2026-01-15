@@ -33,6 +33,7 @@ uint8_t locPtr;
 uint8_t regX, regY, regZ;
 // If carry should be used for math
 bool useCarry = false;
+bool carry;
 
 // Opcode enum
 enum Opcodes {
@@ -103,36 +104,42 @@ void LimitRegs() {
 // Perform a single simulation step
 void SimStep() {
     uint8_t op = rom[pcPtr] >> 4;
-    uint8_t val = rom[pcPtr] & 0xF;
+    uint8_t imm = rom[pcPtr] & 0xF;
     switch(op) {
         case OP_NOP:
             break;
         case OP_ADD:
-            regZ = regX + regY;
+            regZ = regX + regY + (useCarry ? (uint8_t)carry : 0);
+            carry = (regZ >> 4) & 0x1;
             regsDirty = true;
             break;
-        case OP_SUB:
-            regZ = regX - regY;
+        // This may not be 100% accurate, due to me
+        // being unsure how logisim implements these
+        case OP_SUB: {
+            uint8_t subTmp = regY + (useCarry ? (uint8_t)carry : 0);
+            regZ = regX - subTmp;
+            carry = regX >= subTmp;
             regsDirty = true;
             break;
+        }
         case OP_WT1:
-            locPtr = (locPtr & 0x0F) | (val << 4);
+            locPtr = (locPtr & 0x0F) | (imm << 4);
             regsDirty = true;
             break;
         case OP_WT2:
-            locPtr = (locPtr & 0xF0) | (val);
+            locPtr = (locPtr & 0xF0) | (imm);
             regsDirty = true;
             break;
         case OP_WTX:
-            regX = val;
+            regX = imm;
             regsDirty = true;
             break;
         case OP_WTY:
-            regY = val;
+            regY = imm;
             regsDirty = true;
             break;
         case OP_WTZ:
-            regZ = val;
+            regZ = imm;
             regsDirty = true;
             break;
         case OP_ZTR:
@@ -145,11 +152,11 @@ void SimStep() {
             regsDirty = true;
             break;
         case OP_PC1:
-            tmpPcPtr = (tmpPcPtr & 0xF0) | (val);
+            tmpPcPtr = (tmpPcPtr & 0xF0) | (imm);
             regsDirty = true;
             break;
         case OP_PC2:
-            tmpPcPtr = (tmpPcPtr & 0x0F) | (val << 4);
+            tmpPcPtr = (tmpPcPtr & 0x0F) | (imm << 4);
             regsDirty = true;
             break;
         case OP_JMP:
@@ -195,6 +202,9 @@ void UpdateDisassembly(WINDOW* win) {
     // Get window size
     int y,x;
     getmaxyx(win, y, x);
+    werase(win);
+    box(win, 0, 0);
+    mvwaddstr(win, 0, 1, "[Disassembly]");
     int cursor_row = y / 2; // where the ">" is
     mvwaddch(win, cursor_row, 1, '>');
     int half_lines = (y - 2) / 2; // number of lines above/below cursor
@@ -280,15 +290,11 @@ void UpdateText(WINDOW* win) {
 
 // Main function
 int main(int argc, char** argv) {
-    // Check if program filename has been passed in
-    if (argc < 2) {
-        printf("No program passed in!\n");
-        return 1;
-    }
     // Read other params
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
             printf("pbpu <file> [options]\n");
+            printf("--help: Print help info\n");
             printf("--step: Single step mode\n");
             printf("--delay=<num>: Delay in microseconds\n");
             return 0;
@@ -306,6 +312,11 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+    }
+    // Check if program filename has been passed in
+    if (argc < 2) {
+        printf("No program passed in!\n");
+        return 1;
     }
     // Scoping these so they don't stick
     // around in memory while we don't need them
@@ -340,8 +351,6 @@ int main(int argc, char** argv) {
     WINDOW* texWin = newwin(4, 20, scrHeight-4, 0);
     // Only needs to be rendered once
     InitMemory(memWin);
-    box(disWin, 0, 0);
-    mvwaddstr(disWin, 0, 1, "[Disassembly]");
 
     noecho();
     cbreak();
