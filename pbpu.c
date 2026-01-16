@@ -10,8 +10,6 @@ int scrHeight, scrWidth;
 int disWidth = 15;
 // If ram needs to be updated
 bool ramDirty = true;
-// If regs needs to be updated
-bool regsDirty = true;
 // If screen needs to be updated
 bool screenDirty = true;
 // Step mode
@@ -111,7 +109,6 @@ void SimStep() {
         case OP_ADD:
             regZ = regX + regY + (useCarry ? (uint8_t)carry : 0);
             carry = (regZ >> 4) & 0x1;
-            regsDirty = true;
             break;
         // This may not be 100% accurate, due to me
         // being unsure how logisim implements these
@@ -119,28 +116,22 @@ void SimStep() {
             uint8_t subTmp = regY + (useCarry ? (uint8_t)carry : 0);
             regZ = regX - subTmp;
             carry = regX >= subTmp;
-            regsDirty = true;
             break;
         }
         case OP_WT1:
             locPtr = (locPtr & 0x0F) | (imm << 4);
-            regsDirty = true;
             break;
         case OP_WT2:
             locPtr = (locPtr & 0xF0) | (imm);
-            regsDirty = true;
             break;
         case OP_WTX:
             regX = imm;
-            regsDirty = true;
             break;
         case OP_WTY:
             regY = imm;
-            regsDirty = true;
             break;
         case OP_WTZ:
             regZ = imm;
-            regsDirty = true;
             break;
         case OP_ZTR:
             WriteNibble(ram, locPtr, regZ);
@@ -149,27 +140,25 @@ void SimStep() {
             break;
         case OP_RTZ:
             regZ = ReadNibble(ram, locPtr);
-            regsDirty = true;
             break;
         case OP_PC1:
             tmpPcPtr = (tmpPcPtr & 0xF0) | (imm);
-            regsDirty = true;
             break;
         case OP_PC2:
             tmpPcPtr = (tmpPcPtr & 0x0F) | (imm << 4);
-            regsDirty = true;
             break;
         case OP_JMP:
-            tmpPcPtr--; // Needs to be here due to a hardware quirk
-            pcPtr = tmpPcPtr;
+            // Only perform JMP if Z is 0
+            if (regZ == 0x0) {
+                // Needs to be here due to a hardware quirk
+                pcPtr = tmpPcPtr-1;
+            }
             break;
         case OP_RTX:
             regX = ReadNibble(ram, locPtr);
-            regsDirty = true;
             break;
         case OP_RTY:
             regY = ReadNibble(ram, locPtr);
-            regsDirty = true;
             break;
         case OP_USC:
             useCarry = !useCarry;
@@ -232,9 +221,9 @@ void UpdateRegisters(WINDOW* win) {
     getmaxyx(win, y, x);
     box(win, 0, 0);
     mvwaddstr(win, 0, 1, "[Registers]");
-    mvwprintw(win, 1, 1, "  X: %01X Y: %01X Z: %01X", regX, regY, regZ);
-    mvwprintw(win, 2, 2, "PC: %02X", pcPtr);
-    mvwprintw(win, 2, x-2-6, "LC: %02X", locPtr);
+    mvwprintw(win, 1, 2, "X[%01X]  Y[%01X]  Z[%01X]", regX, regY, regZ);
+    mvwprintw(win, 2, 2, "C[%c]      LC[%02X]", useCarry ? carry ? '1' : '0' : '-', locPtr);
+    mvwprintw(win, 3, 2, "pc[%02X] -> PC[%02X]", tmpPcPtr, pcPtr);
     wnoutrefresh(win);
 }
 
@@ -344,8 +333,8 @@ int main(int argc, char** argv) {
     getmaxyx(stdscr, scrHeight, scrWidth);
 
     // Define sub-windows
-    WINDOW* regWin = newwin(4, 20, 0, 0);
-    WINDOW* scrWin = newwin(4*2+2,4*4+2+2,4,0);
+    WINDOW* regWin = newwin(5, 20, 0, 0);
+    WINDOW* scrWin = newwin(4*2+2,4*4+2+2,5,0);
     WINDOW* memWin = newwin(scrHeight, 0xF*2 + 8, 0, 20);
     WINDOW* disWin = newwin(scrHeight,disWidth,0, 20 + 0xF*2 + 8);
     WINDOW* texWin = newwin(4, 20, scrHeight-4, 0);
@@ -364,19 +353,9 @@ int main(int argc, char** argv) {
 
     // Main program look
     while(true) {
-        if (!stepMode) {
-            usleep(delayTime);
-        } else {
-            getch();
-        }
-
-        SimStep();
 
         UpdateDisassembly(disWin);
-        if (regsDirty) {
-            UpdateRegisters(regWin);
-            regsDirty = false;
-        }
+        UpdateRegisters(regWin);
         if (screenDirty) {
             UpdateScreen(scrWin);
             screenDirty = false;
@@ -386,6 +365,14 @@ int main(int argc, char** argv) {
             ramDirty = false;
         }
         doupdate();
+
+        if (!stepMode) {
+            usleep(delayTime);
+        } else {
+            getch();
+        }
+
+        SimStep();
     }
     delwin(scrWin);
     endwin();
