@@ -183,7 +183,7 @@ void SimStep() {
 void UpdateScreen(WINDOW* win) {
     if (!ramDirty) return;
     for (uint8_t row = 0; row < 4*2; row++) {   
-        wmove(win, row+1, 1); 
+        wmove(win, row+1, 2); 
         uint8_t rowVal = ReadNibble(ram, row/2);
         for (uint8_t col = 0; col < 4; col++) {
             if ((rowVal >> (3 - col)) & 0x1) {
@@ -283,7 +283,7 @@ void InitMemory(WINDOW* win) {
 // Render info text
 void UpdateText(WINDOW* win) {
     box(win,0,0);
-    mvwaddstr(win, 1, 3, "PBPU-Emu 1.0.0");
+    mvwaddstr(win, 1, 3, "PBPU-Emu 1.0.2");
     mvwaddstr(win, 2, 3, "by  PixelBrush");
     wnoutrefresh(win);
 }
@@ -345,12 +345,13 @@ int main(int argc, char** argv) {
 
     // Define sub-windows
     WINDOW* regWin = newwin(4, 20, 0, 0);
-    WINDOW* scrWin = newwin(4*2+2,4*4+2,4,1);
+    WINDOW* scrWin = newwin(4*2+2,4*4+2+2,4,0);
     WINDOW* memWin = newwin(scrHeight, 0xF*2 + 8, 0, 20);
     WINDOW* disWin = newwin(scrHeight,disWidth,0, 20 + 0xF*2 + 8);
     WINDOW* texWin = newwin(4, 20, scrHeight-4, 0);
     // Only needs to be rendered once
     InitMemory(memWin);
+    UpdateText(texWin);
 
     noecho();
     cbreak();
